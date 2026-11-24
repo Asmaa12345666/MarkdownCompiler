@@ -1,4 +1,3 @@
-
 """
 Markdown -> HTML Compiler
 Phase 2: Syntax Analysis (Parser)
@@ -66,8 +65,11 @@ class Parser:
 
     # LINE -> HASH INLINE* | INLINE+
     def parse_line(self):
-        if self.current().type == HASH:
-            self.advance()
+        start = self.current()   # first token of the line (for error positions)
+        level = 0
+
+        if start.type == HASH:
+            level = len(self.advance().lexeme)   # "#" -> 1, "##" -> 2 ...
             line_type = "Heading"
         else:
             line_type = "Paragraph"
@@ -94,7 +96,13 @@ class Parser:
                     )
 
                 bold_text = self.advance().lexeme
-                self.expect(BOLD)
+
+                if self.current().type != BOLD:
+                    raise SyntaxError(
+                        f"Line {token.line}, column {token.col}: "
+                        "Unclosed bold, missing closing **"
+                    )
+                self.advance()
 
                 children.append({
                     "type": "Bold",
@@ -105,18 +113,37 @@ class Parser:
                 self.advance()
 
                 link_text = self.expect(TEXT).lexeme
-                self.expect(RBRACKET)
+
+                if self.current().type != RBRACKET:
+                    raise SyntaxError(
+                        f"Line {token.line}, column {token.col}: "
+                        "Link is missing closing ]"
+                    )
+                self.advance()
                 self.expect(LPAREN)
-                url = self.expect(TEXT).lexeme
-                self.expect(RPAREN)
+
+                # [text]() -> empty URL
+                url = ""
+                if self.current().type == TEXT:
+                    url = self.advance().lexeme
+
+                if self.current().type != RPAREN:
+                    raise SyntaxError(
+                        f"Line {token.line}, column {token.col}: "
+                        "Link is missing closing )"
+                    )
+                self.advance()
 
                 if not url.strip():
-                    raise SyntaxError("Link URL cannot be empty")
+                    raise SyntaxError(
+                        f"Line {token.line}, column {token.col}: "
+                        "Link URL cannot be empty"
+                    )
 
                 children.append({
                     "type": "Link",
-                    "text": link_text,
-                    "url": url
+                    "text": link_text.strip(),
+                    "url": url.strip()
                 })
 
             else:
@@ -125,11 +152,27 @@ class Parser:
                     f"Unexpected token {token.type}"
                 )
 
-        if line_type == "Heading" and not children:
-            raise SyntaxError("Heading cannot be empty")
+        if line_type == "Heading":
+            # "# Title" -> remove the space after #
+            if children and children[0]["type"] == "Text":
+                children[0]["value"] = children[0]["value"].lstrip()
+                if not children[0]["value"]:
+                    children.pop(0)          # it was only spaces
+
+            if not children:
+                raise SyntaxError(
+                    f"Line {start.line}, column {start.col}: "
+                    "Heading cannot be empty"
+                )
+
+            return {
+                "type": "Heading",
+                "level": level,
+                "children": children
+            }
 
         return {
-            "type": line_type,
+            "type": "Paragraph",
             "children": children
         }
 
