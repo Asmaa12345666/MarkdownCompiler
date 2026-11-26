@@ -21,6 +21,14 @@ TEXT     = "TEXT"       # أي نص عادي
 NEWLINE  = "NEWLINE"    # \n
 EOF      = "EOF"        # نهاية الملف
 
+# ---- Extensions ----
+STAR     = "STAR"       # *        (مائل: *كلام*)
+BACKTICK = "BACKTICK"   # `        (كود: `print()`)
+HR       = "HR"         # ---      (خط فاصل، لوحده في السطر)
+GT       = "GT"         # >        (اقتباس، في أول السطر فقط)
+DASH     = "DASH"       # "- "     (عنصر قائمة، في أول السطر فقط)
+BANG     = "BANG"       # !        (صورة، لازم بعدها [ على طول)
+
 
 @dataclass
 class Token:
@@ -67,6 +75,12 @@ class Lexer:
     def at_line_start(self):
         return self.col == 1
 
+    def is_hr_line(self):
+        """السطر كله شرط (---) و3 على الأقل؟ (مسموح مسافات)"""
+        end = self.src.find("\n", self.pos)
+        rest = self.src[self.pos: end if end != -1 else len(self.src)].strip()
+        return len(rest) >= 3 and set(rest) == {"-"}
+
     # ---- الدالة الرئيسية ----
     def tokenize(self):
         tokens = []
@@ -87,11 +101,49 @@ class Lexer:
                     lexeme += self.advance()
                 tokens.append(Token(HASH, lexeme, line, col))
 
+            # 2b) --- لوحده في السطر -> HR
+            elif ch == "-" and self.at_line_start() and self.is_hr_line():
+                lexeme = ""
+                while self.peek() not in ("\n", "\0"):
+                    lexeme += self.advance()
+                tokens.append(Token(HR, lexeme.strip(), line, col))
+
+            # 2c) "- " في أول السطر -> DASH (عنصر قائمة)
+            elif ch == "-" and self.at_line_start() and self.peek(1) == " ":
+                self.advance()
+                tokens.append(Token(DASH, "-", line, col))
+
+            # 2d) > في أول السطر -> GT (اقتباس)
+            elif ch == ">" and self.at_line_start():
+                tokens.append(Token(GT, self.advance(), line, col))
+
             # 3) ** -> BOLD  (حرفين ورا بعض)
             elif ch == "*" and self.peek(1) == "*":
                 self.advance()
                 self.advance()
                 tokens.append(Token(BOLD, "**", line, col))
+
+            # 3b) * لوحدها -> STAR (مائل)
+            elif ch == "*":
+                tokens.append(Token(STAR, self.advance(), line, col))
+
+            # 3c) ` -> BACKTICK، وجوه الكود بيتقري زي ما هو (raw)
+            elif ch == "`":
+                tokens.append(Token(BACKTICK, self.advance(), line, col))
+                code_line, code_col = self.line, self.col
+                code = ""
+                while not self.at_end() and self.peek() not in "`\n":
+                    code += self.advance()
+                if code:
+                    tokens.append(Token(TEXT, code, code_line, code_col))
+                if self.peek() == "`":
+                    tokens.append(Token(BACKTICK, "`", self.line, self.col))
+                    self.advance()
+                # لو مفيش ` قافلة، الـ Parser هو اللي هيطلع الخطأ
+
+            # 3d) ![ -> BANG (بداية صورة)
+            elif ch == "!" and self.peek(1) == "[":
+                tokens.append(Token(BANG, self.advance(), line, col))
 
             # 4) الرموز المفردة
             elif ch == "[":
@@ -108,9 +160,9 @@ class Lexer:
                 lexeme = ""
                 while not self.at_end():
                     c = self.peek()
-                    if c in "\n[]()":
+                    if c in "\n[]()*`":
                         break
-                    if c == "*" and self.peek(1) == "*":
+                    if c == "!" and self.peek(1) == "[":
                         break
                     lexeme += self.advance()
                 tokens.append(Token(TEXT, lexeme, line, col))
