@@ -11,6 +11,9 @@ Usage:
     python main.py file.md --tokens     # also print the tokens
     python main.py file.md --ast        # also print the AST (JSON)
     python main.py file.md --tree       # also print the parse tree
+    python main.py file.md --prefix     # also print prefix (Polish) notation
+    python main.py file.md --derivation # also print the leftmost derivation
+    python main.py file.md --report     # also write report.html (tokens, tree, LL(1) ...)
     python main.py --ll1                # LL(1) part (ll1.py)
     python main.py --help
 """
@@ -23,6 +26,7 @@ import sys
 from lexer import Lexer
 from parser import Parser
 from generator import generate, save
+from generator import generate_report, ll1_data, to_prefix, leftmost_derivation
 
 
 def read_file(filename):
@@ -80,7 +84,8 @@ def run_optional(module_name, owner):
     module.main()
 
 
-def compile_file(input_file, output_file, show_tokens, show_ast, show_tree):
+def compile_file(input_file, output_file, show_tokens, show_ast, show_tree,
+                 show_prefix=False, show_derivation=False, report_file=None):
     source = read_file(input_file)
 
     # Phase 1: Lexical Analysis
@@ -99,12 +104,29 @@ def compile_file(input_file, output_file, show_tokens, show_ast, show_tree):
         print_title("PHASE 2: PARSE TREE")
         print_tree(ast)
 
+    if show_prefix:
+        print_title("PREFIX (POLISH) NOTATION")
+        print(to_prefix(ast))
+    if show_derivation:
+        print_title("LEFTMOST DERIVATION")
+        for rule, form in leftmost_derivation(ast):
+            print(f"=> {form}" if rule else form)
+
     # Phase 3: Code Generation
     html_code = generate(ast)
     save(html_code, output_file)
 
     print_title("COMPILATION SUCCESSFUL")
     print(f"{input_file}  ->  {output_file}")
+
+    # Compiler report (Manar's generate_report + Omnia's LL(1) steps)
+    if report_file:
+        try:
+            ll1 = ll1_data()
+        except ImportError:                 # ll1.py not in the folder
+            ll1 = None
+        save(generate_report(ast, tokens, ll1), report_file)
+        print(f"Report      ->  {report_file}")
 
 
 def main():
@@ -125,6 +147,12 @@ def main():
                             help="print the AST as JSON")
     arg_parser.add_argument("--tree", action="store_true",
                             help="print the parse tree")
+    arg_parser.add_argument("--prefix", action="store_true",
+                            help="print the prefix (Polish) notation")
+    arg_parser.add_argument("--derivation", action="store_true",
+                            help="print the leftmost derivation")
+    arg_parser.add_argument("--report", action="store_true",
+                            help="also write report.html (tokens, tree, prefix, derivation, LL(1))")
     arg_parser.add_argument("--ll1", action="store_true",
                             help="run the LL(1) part (ll1.py)")
     args = arg_parser.parse_args()
@@ -136,7 +164,9 @@ def main():
 
     try:
         compile_file(args.input, args.output,
-                     args.tokens, args.ast, args.tree)
+                     args.tokens, args.ast, args.tree,
+                     args.prefix, args.derivation,
+                     "report.html" if args.report else None)
     except SyntaxError as error:
         print_title("SYNTAX ERROR")
         print(error)

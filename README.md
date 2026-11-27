@@ -34,11 +34,18 @@ python main.py file.md out.html        # file.md  -> out.html
 python main.py file.md --tokens        # also print the tokens (Phase 1)
 python main.py file.md --ast           # also print the AST as JSON (Phase 2)
 python main.py file.md --tree          # also draw the parse tree (Phase 2)
+python main.py file.md --prefix        # also print the prefix (Polish) notation
+python main.py file.md --derivation    # also print the leftmost derivation
+python main.py file.md --report        # also write report.html (full compiler report)
 python main.py --ll1                   # LL(1) parsing steps (ll1.py)
 python main.py --help
 ```
 
 Then open `index.html` in any browser.
+
+`--report` writes `report.html`, one page that shows every phase of the compiler:
+the tokens table, the parse tree, the prefix notation, the leftmost derivation,
+and the LL(1) steps (grammar, FIRST/FOLLOW, parse table and stack trace for `id+id*id`).
 
 ### Example
 
@@ -80,7 +87,7 @@ Generated HTML body:
 |----------------|----------------------|--------------|
 | `lexer.py`     | 1. Lexical Analysis  | Reads the text character by character and splits it into tokens. |
 | `parser.py`    | 2. Syntax Analysis   | Checks the tokens against the grammar and builds the AST. Reports syntax errors. |
-| `generator.py` | 3. Code Generation   | Walks the AST and writes a full HTML page (with CSS, right-to-left for Arabic). |
+| `generator.py` | 3. Code Generation   | Walks the AST and writes a full HTML page (with CSS, right-to-left for Arabic). Also builds prefix notation, leftmost derivation and the HTML compiler report. |
 | `main.py`      | Driver               | Runs the three phases in order, handles errors and command-line flags. |
 | `ll1.py`       | LL(1) parsing        | Left recursion, left factoring, FIRST/FOLLOW, parse table and stack trace. |
 | `input.md`     | —                    | Sample input file. |
@@ -203,4 +210,4 @@ F  -> ( E ) | id
 |--------|------|
 | Asmaa  | Lexer (with the new tokens), `main.py`, README, report |
 | Omnia  | Parser (with the six extensions), error tests, `ll1.py` |
-| Manar  | Code generator |
+| Manar  | Code generator (with the six extensions), prefix notation, derivation, HTML report |
