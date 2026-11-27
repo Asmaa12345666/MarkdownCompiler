@@ -6,6 +6,7 @@ Builds an Abstract Syntax Tree (AST)
 
 from lexer import Lexer, EOF, NEWLINE, HASH, BOLD
 from lexer import TEXT, LBRACKET, RBRACKET, LPAREN, RPAREN
+from lexer import STAR, BACKTICK, HR, GT, DASH, BANG
 import json
 import sys
 
@@ -14,6 +15,7 @@ class Parser:
     def __init__(self, tokens):
         self.tokens = tokens
         self.pos = 0
+        self.last_block_was_adjacent = False   # used to group list / quote lines
 
     def current(self):
         return self.tokens[self.pos]
@@ -37,7 +39,10 @@ class Parser:
         self.advance()
         return token
 
-    # DOCUMENT -> (LINE NEWLINE)* LINE? EOF
+    def error(self, token, message):
+        raise SyntaxError(f"Line {token.line}, column {token.col}: {message}")
+
+    # DOCUMENT -> (BLOCK NEWLINE)* BLOCK? EOF
     def parse(self):
         document = {
             "type": "Document",
@@ -49,132 +54,160 @@ class Parser:
                 self.advance()
                 continue
 
-            document["children"].append(self.parse_line())
+            block = self.parse_block()
 
-            if self.current().type == NEWLINE:
-                self.advance()
-            elif self.current().type != EOF:
-                token = self.current()
-                raise SyntaxError(
-                    f"Line {token.line}, column {token.col}: "
-                    "Expected NEWLINE or EOF"
-                )
+            # consecutive "- item" lines -> one List
+            # consecutive "> quote" lines -> one Blockquote
+            previous = document["children"][-1] if document["children"] else None
+            if (previous and previous["type"] == block["type"]
+                    and block["type"] in ("List", "Blockquote")
+                    and self.last_block_was_adjacent):
+                key = "items" if block["type"] == "List" else "children"
+                previous[key].extend(block[key])
+            else:
+                document["children"].append(block)
+
+            self.end_of_line()
 
         self.expect(EOF)
         return document
 
-    # LINE -> HASH INLINE* | INLINE+
-    def parse_line(self):
+    def end_of_line(self):
+        """After a block: NEWLINE or EOF. Remembers if the next line follows directly."""
+        if self.current().type == NEWLINE:
+            self.advance()
+            # a blank line ends a list / blockquote
+            self.last_block_was_adjacent = self.current().type != NEWLINE
+        elif self.current().type != EOF:
+            self.error(self.current(), "Expected NEWLINE or EOF")
+
+    # BLOCK -> HR | HASH INLINE* | GT INLINE* | DASH INLINE+ | INLINE+
+    def parse_block(self):
         start = self.current()   # first token of the line (for error positions)
-        level = 0
+
+        if start.type == HR:
+            self.advance()
+            return {"type": "HorizontalRule"}
 
         if start.type == HASH:
             level = len(self.advance().lexeme)   # "#" -> 1, "##" -> 2 ...
-            line_type = "Heading"
-        else:
-            line_type = "Paragraph"
-
-        children = []
-
-        while self.current().type not in (NEWLINE, EOF):
-            token = self.current()
-
-            if token.type == TEXT:
-                self.advance()
-                children.append({
-                    "type": "Text",
-                    "value": token.lexeme
-                })
-
-            elif token.type == BOLD:
-                self.advance()
-
-                if self.current().type != TEXT:
-                    raise SyntaxError(
-                        f"Line {token.line}, column {token.col}: "
-                        "Expected text inside bold markers"
-                    )
-
-                bold_text = self.advance().lexeme
-
-                if self.current().type != BOLD:
-                    raise SyntaxError(
-                        f"Line {token.line}, column {token.col}: "
-                        "Unclosed bold, missing closing **"
-                    )
-                self.advance()
-
-                children.append({
-                    "type": "Bold",
-                    "value": bold_text
-                })
-
-            elif token.type == LBRACKET:
-                self.advance()
-
-                link_text = self.expect(TEXT).lexeme
-
-                if self.current().type != RBRACKET:
-                    raise SyntaxError(
-                        f"Line {token.line}, column {token.col}: "
-                        "Link is missing closing ]"
-                    )
-                self.advance()
-                self.expect(LPAREN)
-
-                # [text]() -> empty URL
-                url = ""
-                if self.current().type == TEXT:
-                    url = self.advance().lexeme
-
-                if self.current().type != RPAREN:
-                    raise SyntaxError(
-                        f"Line {token.line}, column {token.col}: "
-                        "Link is missing closing )"
-                    )
-                self.advance()
-
-                if not url.strip():
-                    raise SyntaxError(
-                        f"Line {token.line}, column {token.col}: "
-                        "Link URL cannot be empty"
-                    )
-
-                children.append({
-                    "type": "Link",
-                    "text": link_text.strip(),
-                    "url": url.strip()
-                })
-
-            else:
-                raise SyntaxError(
-                    f"Line {token.line}, column {token.col}: "
-                    f"Unexpected token {token.type}"
-                )
-
-        if line_type == "Heading":
-            # "# Title" -> remove the space after #
-            if children and children[0]["type"] == "Text":
-                children[0]["value"] = children[0]["value"].lstrip()
-                if not children[0]["value"]:
-                    children.pop(0)          # it was only spaces
-
+            children = self.parse_inlines()
             if not children:
-                raise SyntaxError(
-                    f"Line {start.line}, column {start.col}: "
-                    "Heading cannot be empty"
-                )
+                self.error(start, "Heading cannot be empty")
+            return {"type": "Heading", "level": level, "children": children}
 
-            return {
-                "type": "Heading",
-                "level": level,
-                "children": children
-            }
+        if start.type == GT:
+            self.advance()
+            children = self.parse_inlines()
+            if not children:
+                self.error(start, "Blockquote cannot be empty")
+            return {"type": "Blockquote",
+                    "children": [{"type": "Paragraph", "children": children}]}
 
-        return {
-            "type": "Paragraph",
-            "children": children
-        }
+        if start.type == DASH:
+            self.advance()
+            children = self.parse_inlines()
+            if not children:
+                self.error(start, "List item cannot be empty")
+            return {"type": "List",
+                    "items": [{"type": "ListItem", "children": children}]}
+
+        children = self.parse_inlines(strip=False)
+        return {"type": "Paragraph", "children": children}
+
+    # INLINE* until end of line
+    def parse_inlines(self, strip=True):
+        children = []
+        while self.current().type not in (NEWLINE, EOF):
+            children.append(self.parse_inline())
+
+        if strip and children and children[0]["type"] == "Text":
+            # "# Title" / "> quote" / "- item" -> remove the space after the marker
+            children[0]["value"] = children[0]["value"].lstrip()
+            if not children[0]["value"]:
+                children.pop(0)          # it was only spaces
+        return children
+
+    # INLINE -> TEXT | BOLD TEXT BOLD | STAR TEXT STAR | BACKTICK TEXT? BACKTICK
+    #         | LBRACKET TEXT RBRACKET LPAREN TEXT RPAREN
+    #         | BANG LBRACKET TEXT? RBRACKET LPAREN TEXT RPAREN
+    def parse_inline(self):
+        token = self.current()
+
+        if token.type == TEXT:
+            self.advance()
+            return {"type": "Text", "value": token.lexeme}
+
+        if token.type == BOLD:
+            return {"type": "Bold",
+                    "value": self.parse_wrapped(BOLD, "bold", "**")}
+
+        if token.type == STAR:
+            return {"type": "Italic",
+                    "value": self.parse_wrapped(STAR, "italic", "*")}
+
+        if token.type == BACKTICK:
+            self.advance()
+            code = ""
+            if self.current().type == TEXT:
+                code = self.advance().lexeme
+            if self.current().type != BACKTICK:
+                self.error(token, "Unclosed inline code, missing closing `")
+            self.advance()
+            return {"type": "Code", "value": code}
+
+        if token.type == LBRACKET:
+            text, url = self.parse_link_parts(token, "Link", allow_empty_text=False)
+            return {"type": "Link", "text": text, "url": url}
+
+        if token.type == BANG:
+            self.advance()
+            if self.current().type != LBRACKET:
+                self.error(token, "Expected [ after ! in image")
+            alt, url = self.parse_link_parts(token, "Image", allow_empty_text=True)
+            return {"type": "Image", "alt": alt, "url": url}
+
+        self.error(token, f"Unexpected token {token.type}")
+
+    def parse_wrapped(self, marker, name, symbol):
+        """BOLD TEXT BOLD  or  STAR TEXT STAR"""
+        token = self.advance()
+        if self.current().type != TEXT:
+            self.error(token, f"Expected text inside {name} markers")
+        value = self.advance().lexeme
+        if self.current().type != marker:
+            self.error(token, f"Unclosed {name}, missing closing {symbol}")
+        self.advance()
+        return value
+
+    def parse_link_parts(self, token, name, allow_empty_text):
+        """[text](url)  -> (text, url).  token = first token (for errors)"""
+        self.expect(LBRACKET)
+
+        text = ""
+        if allow_empty_text and self.current().type == RBRACKET:
+            pass                                 # ![](pic.png) -> empty alt
+        else:
+            text = self.expect(TEXT).lexeme
+
+        if self.current().type != RBRACKET:
+            self.error(token, f"{name} is missing closing ]")
+        self.advance()
+        self.expect(LPAREN)
+
+        # [text]() -> empty URL
+        url = ""
+        if self.current().type == TEXT:
+            url = self.advance().lexeme
+
+        if self.current().type != RPAREN:
+            self.error(token, f"{name} is missing closing )")
+        self.advance()
+
+        if not url.strip():
+            self.error(token, f"{name} URL cannot be empty")
+
+        return text.strip(), url.strip()
 
 
 def main():
