@@ -51,7 +51,8 @@ def print_tree(node, prefix="", is_last=True, is_root=True):
         print(prefix + connector + describe(node))
         new_prefix = prefix + ("    " if is_last else "│   ")
 
-    children = node.get("children", [])
+    # List keeps its ListItems in "items", the others use "children"
+    children = node.get("children", node.get("items", []))
     for i, child in enumerate(children):
         print_tree(child, new_prefix, i == len(children) - 1, False)
 
@@ -60,11 +61,13 @@ def describe(node):
     kind = node["type"]
     if kind == "Heading":
         return f"Heading (level {node['level']})"
-    if kind in ("Text", "Bold"):
+    if kind in ("Text", "Bold", "Italic", "Code"):
         return f'{kind}: "{node["value"]}"'
     if kind == "Link":
         return f'Link: text="{node["text"]}" url="{node["url"]}"'
-    return kind
+    if kind == "Image":
+        return f'Image: alt="{node["alt"]}" url="{node["url"]}"'
+    return kind     # Document, Paragraph, Blockquote, List, ListItem, HorizontalRule
 
 
 def run_optional(module_name, owner):
@@ -136,6 +139,10 @@ def main():
                      args.tokens, args.ast, args.tree)
     except SyntaxError as error:
         print_title("SYNTAX ERROR")
+        print(error)
+        return 1
+    except ValueError as error:
+        print_title("GENERATOR ERROR")
         print(error)
         return 1
     except OSError as error:
